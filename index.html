@@ -543,6 +543,7 @@ body::before{
     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
     今天要处理
     <span style="margin-left:auto;display:flex;gap:6px">
+      <button class="btn-sm" onclick="openSyncModal()" style="font-size:11px;padding:4px 10px;min-height:28px;background:var(--primary-light);border-color:var(--primary);color:var(--primary-dark)">同步</button>
       <button class="btn-sm" onclick="exportData()" style="font-size:11px;padding:4px 10px;min-height:28px">导出</button>
       <button class="btn-sm" onclick="importData()" style="font-size:11px;padding:4px 10px;min-height:28px">导入</button>
     </span>
@@ -700,6 +701,31 @@ body::before{
   </div>
 </div>
 
+<!-- Sync Modal -->
+<div class="modal-overlay" id="syncModalOverlay">
+  <div class="modal" id="syncModal">
+    <h3>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      数据同步
+    </h3>
+    <p style="font-size:13px;color:var(--text-light);margin-bottom:16px;line-height:1.6">
+      用「同步链接」在电脑和手机之间同步数据：<br>
+      ① 本机点「生成链接」→ 复制<br>
+      ② 另一个设备打开链接（或粘贴后点「同步」）<br>
+      ③ 自动合并两边数据，谁都不丢
+    </p>
+    <div class="form-group">
+      <label>同步链接</label>
+      <textarea id="syncUrlText" style="min-height:70px;font-size:13px;word-break:break-all" placeholder="粘贴从另一台设备复制的同步链接..."></textarea>
+    </div>
+    <div class="sync-result" id="syncResult" style="display:none;background:var(--primary-light);border-radius:var(--radius-sm);padding:12px 14px;font-size:13px;color:var(--primary-dark);margin-bottom:16px;line-height:1.6"></div>
+    <div class="form-actions" style="flex-wrap:wrap">
+      <button class="btn-submit" style="flex:1;min-width:140px" onclick="generateSyncLink()">生成同步链接</button>
+      <button class="btn-submit" style="flex:1;min-width:140px;background:linear-gradient(135deg,#7BC8A4,#5AAE8C)" onclick="syncFromInput()">粘贴链接同步</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
@@ -724,6 +750,148 @@ function save(key, data) {
 }
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// ===== SYNC (跨设备同步链接) =====
+const SYNC_MAGIC = 'wbfh_v1:';
+
+function openSyncModal() {
+  document.getElementById('syncModalOverlay').classList.add('show');
+  document.getElementById('syncResult').style.display = 'none';
+  document.getElementById('syncUrlText').value = '';
+  document.body.style.overflow = 'hidden';
+}
+
+function closeSyncModal() {
+  document.getElementById('syncModalOverlay').classList.remove('show');
+  document.body.style.overflow = '';
+}
+
+// 把当前全部数据打包成同步链接
+function generateSyncLink() {
+  const data = {
+    v: 1,
+    t: Date.now(),
+    todos: load(KEYS.todos) || [],
+    recurring: load(KEYS.recurring) || [],
+    videos: load(KEYS.videos) || [],
+    elevatorHistory: load(KEYS.elevatorHistory) || []
+  };
+  // 压缩字段名减小体积
+  const json = JSON.stringify(data);
+  const b64 = btoa(unescape(encodeURIComponent(json)));
+  const url = location.origin + location.pathname + '#sync=' + b64;
+
+  // 复制到剪贴板
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(() => {
+      showSyncResult('✅ 链接已复制！<br>在另一台设备上打开这个链接，或粘贴到「同步链接」输入框后点「粘贴链接同步」');
+    }).catch(() => { showSyncResult('📋 链接生成完毕，请手动复制下方内容（已自动填入输入框）'); });
+  } else {
+    showSyncResult('📋 链接生成完毕，请手动复制下方内容');
+  }
+  document.getElementById('syncUrlText').value = url;
+}
+
+// 从输入框读取链接并合并
+function syncFromInput() {
+  const url = document.getElementById('syncUrlText').value.trim();
+  if (!url) { showSyncResult('请先粘贴同步链接'); return; }
+  const extracted = extractSyncData(url);
+  if (!extracted) { showSyncResult('⚠️ 链接格式不正确，请检查是否完整复制'); return; }
+  const result = mergeIncoming(extracted);
+  refreshAll();
+  showSyncResult('✅ 同步完成！新增 ' + result.added + ' 条，更新 ' + result.updated + ' 条，共 ' + result.total + ' 条数据');
+  showToast('同步完成！', 'success');
+}
+
+// 从链接/hash中提取数据对象
+function extractSyncData(url) {
+  try {
+    let b64 = null;
+    if (url && url.indexOf('#sync=') >= 0) {
+      b64 = url.split('#sync=')[1];
+    } else if (url && url.indexOf('wbfh_v1:') === 0) {
+      b64 = url.replace('wbfh_v1:', '');
+    }
+    if (!b64) return null;
+    // 去掉可能的尾部多余内容
+    b64 = b64.trim();
+    const json = decodeURIComponent(escape(atob(b64)));
+    const data = JSON.parse(json);
+    if (!data || data.v !== 1) return null;
+    return data;
+  } catch(e) { return null; }
+}
+
+// 合并 incoming 数据到本地（按id去重，同id保留t更新的）
+function mergeIncoming(incoming) {
+  let added = 0, updated = 0;
+
+  // 通用合并函数
+  function mergeArr(localKey, incomingArr, itemKey) {
+    const local = load(localKey) || [];
+    const map = {};
+    local.forEach(item => map[item[itemKey]] = item);
+    let addCount = 0, updCount = 0;
+    (incomingArr || []).forEach(item => {
+      const id = item[itemKey];
+      if (map[id]) {
+        // 比较时间戳：incoming 更新则覆盖
+        const cur = map[id];
+        if ((item.t || 0) > (cur.t || 0)) { map[id] = item; updCount++; }
+      } else {
+        map[id] = item; addCount++;
+      }
+    });
+    save(localKey, Object.values(map));
+    return { add: addCount, upd: updCount };
+  }
+
+  // 处理旧数据缺 t 的情况：给本地数据补 t
+  [KEYS.todos, KEYS.recurring, KEYS.videos, KEYS.elevatorHistory].forEach(k => {
+    const arr = load(k);
+    if (arr) {
+      let changed = false;
+      arr.forEach(item => { if (!item.t) { item.t = Date.now() - 1000; changed = true; } });
+      if (changed) save(k, arr);
+    }
+  });
+
+  const r1 = mergeArr(KEYS.todos, incoming.todos, 'id');
+  const r2 = mergeArr(KEYS.recurring, incoming.recurring, 'id');
+  const r3 = mergeArr(KEYS.videos, incoming.videos, 'id');
+  const r4 = mergeArr(KEYS.elevatorHistory, incoming.elevatorHistory, 'id');
+
+  added = r1.add + r2.add + r3.add + r4.add;
+  updated = r1.upd + r2.upd + r3.upd + r4.upd;
+
+  // 清理URL中的sync数据，避免刷新重复同步
+  try { history.replaceState(null, '', location.pathname); } catch(e) {}
+
+  return { added, updated, total: added + updated };
+}
+
+function showSyncResult(msg) {
+  const el = document.getElementById('syncResult');
+  el.innerHTML = msg;
+  el.style.display = 'block';
+}
+
+// 页面加载时自动检测 URL 是否带同步数据
+function checkUrlSync() {
+  const hash = location.hash;
+  if (hash && hash.indexOf('#sync=') === 0) {
+    const extracted = extractSyncData(hash);
+    if (extracted) {
+      const result = mergeIncoming(extracted);
+      // 延迟渲染，等DOM准备好
+      setTimeout(() => {
+        refreshAll();
+        showToast('已从链接同步 ' + result.total + ' 条数据', 'success');
+      }, 300);
+    }
+  }
 }
 
 // ===== TOAST =====
@@ -891,7 +1059,8 @@ function onCopySuccess(text) {
     date: new Date().toISOString().split('T')[0],
     time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
     preview: text.split('\n').filter(l => l.includes('：') && !l.startsWith('【') && !l.startsWith('检验日期') && !l.startsWith('记录时间') && !l.startsWith('---')).slice(0, 3).join(' | '),
-    fullText: text
+    fullText: text,
+    t: Date.now()
   });
   if (history.length > 50) history.length = 50;
   save(KEYS.elevatorHistory, history);
@@ -962,7 +1131,8 @@ function addVideo() {
     id: uid(),
     bvid: bvid,
     title: '视频 ' + bvid,
-    addedAt: new Date().toISOString()
+    addedAt: new Date().toISOString(),
+    t: Date.now()
   });
   save(KEYS.videos, videos);
   input.value = '';
@@ -1054,7 +1224,8 @@ function addTodo(text) {
     done: false,
     order: maxOrder + 1,
     date: new Date().toISOString().split('T')[0],
-    fromRecurring: false
+    fromRecurring: false,
+    t: Date.now()
   };
   todos.push(newTodo);
   save(KEYS.todos, todos);
@@ -1072,6 +1243,7 @@ function toggleTodo(id) {
   const todo = todos.find(t => t.id === id);
   if (todo) {
     todo.done = !todo.done;
+    todo.t = Date.now();
     save(KEYS.todos, todos);
     renderTodos();
     renderTodayFocus();
@@ -1114,8 +1286,8 @@ function moveTodo(id, direction) {
 
   // Re-sort
   todos.sort((a, b) => a.order - b.order);
-  // Reassign orders
-  todos.forEach((t, i) => t.order = i);
+  // Reassign orders + update timestamps for merge conflict resolution
+  todos.forEach((t, i) => { t.order = i; t.t = Date.now(); });
   save(KEYS.todos, todos);
   renderTodos();
 }
@@ -1241,7 +1413,8 @@ function addRecurring() {
     scheduleType: type,
     scheduleValue: scheduleValue,
     lastRun: null,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    t: Date.now()
   });
   save(KEYS.recurring, recurring);
   closeRecurringForm();
@@ -1414,6 +1587,7 @@ function quickComplete(id) {
   const todo = todos.find(t => t.id === id);
   if (todo) {
     todo.done = true;
+    todo.t = Date.now();
     save(KEYS.todos, todos);
   }
   
@@ -1497,18 +1671,25 @@ document.getElementById('elevatorModalOverlay').addEventListener('click', functi
 document.getElementById('recurringModalOverlay').addEventListener('click', function(e) {
   if (e.target === this) closeRecurringForm();
 });
+document.getElementById('syncModalOverlay').addEventListener('click', function(e) {
+  if (e.target === this) closeSyncModal();
+});
 
 // Keyboard shortcuts
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
     closeElevatorForm();
     closeRecurringForm();
+    closeSyncModal();
   }
 });
 
 // Init
 initExampleData();
 refreshAll();
+
+// Check URL for sync data (opened via sync link)
+checkUrlSync();
 
 // Auto-refresh recurring on visibility change
 document.addEventListener('visibilitychange', function() {
