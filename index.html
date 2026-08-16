@@ -981,6 +981,9 @@ document.getElementById('tabNav').addEventListener('click', function(e) {
 
 // ===== ELEVATOR FORM =====
 function openElevatorForm() {
+  // 新建模式：重置编辑状态
+  editingHistoryId = null;
+  editingWas = false;
   // Clear form
   const ids = ['ef_elevatorType','ef_expireDate','ef_renovation','ef_contact','ef_maintainer',
     'ef_handwheel','ef_emergencyElectric','ef_autoReset','ef_brakeType','ef_upOverspeed',
@@ -1001,6 +1004,9 @@ const EF_FIELDS = ['ef_elevatorType','ef_expireDate','ef_renovation','ef_contact
   'ef_handwheel','ef_emergencyElectric','ef_autoReset','ef_brakeType','ef_upOverspeed',
   'ef_unexpectedMove','ef_beltType','ef_doorCloser','ef_sheaveMaterial','ef_bufferType',
   'ef_counterweight','ef_safetyWindow','ef_counterSafety'];
+
+let editingHistoryId = null; // 当前编辑的历史记录id（null=新建）
+let editingWas = false;      // 是否为编辑模式（用于toast提示）
 
 function updateElevatorFieldState() {
   EF_FIELDS.forEach(id => {
@@ -1034,15 +1040,7 @@ function submitElevatorForm() {
     return el && el.value.trim() === '';
   });
   if (unfilled.length > 0) {
-    const labelMap = {
-      ef_elevatorType: '电梯类型', ef_expireDate: '设备到期时间', ef_renovation: '改造情况',
-      ef_contact: '联系人', ef_maintainer: '维保单位', ef_handwheel: '盘车轮',
-      ef_emergencyElectric: '紧急电动', ef_autoReset: '限速器自动复位', ef_brakeType: '制动器形式',
-      ef_upOverspeed: '上行超速保护装置', ef_unexpectedMove: '意外移动保护装置', ef_beltType: '包覆带',
-      ef_doorCloser: '层门自闭装置类型', ef_sheaveMaterial: '反绳轮材质', ef_bufferType: '缓冲器类型',
-      ef_counterweight: '对重块数量', ef_safetyWindow: '安全窗', ef_counterSafety: '对重安全钳'
-    };
-    const names = unfilled.map(id => labelMap[id] || id).join('、');
+    const names = unfilled.map(id => EF_LABEL_MAP[id] || id).join('、');
     showToast('⚠️ 还有 ' + unfilled.length + ' 项未填写：' + names, '');
     // 滚动到第一个未填写项
     const firstEl = document.getElementById(unfilled[0]);
@@ -1113,22 +1111,89 @@ function fallbackCopy(text) {
 }
 
 function onCopySuccess(text) {
-  // Save to history
-  const history = load(KEYS.elevatorHistory) || [];
-  history.unshift({
-    id: uid(),
-    date: new Date().toISOString().split('T')[0],
-    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-    preview: text.split('\n').filter(l => l.includes('：') && !l.startsWith('【') && !l.startsWith('检验日期') && !l.startsWith('记录时间') && !l.startsWith('---')).slice(0, 3).join(' | '),
-    fullText: text,
-    t: Date.now()
+  const preview = text.split('\n').filter(l => l.includes('：') && !l.startsWith('【') && !l.startsWith('检验日期') && !l.startsWith('记录时间') && !l.startsWith('---')).slice(0, 3).join(' | ');
+  const fields = {};
+  EF_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) fields[id] = el.value;
   });
+
+  const history = load(KEYS.elevatorHistory) || [];
+  const now = new Date();
+  const record = {
+    id: editingHistoryId || uid(),
+    date: now.toISOString().split('T')[0],
+    time: now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    preview: preview,
+    fullText: text,
+    fields: fields,
+    t: Date.now()
+  };
+
+  if (editingHistoryId) {
+    // 编辑模式：更新已有记录
+    const idx = history.findIndex(h => h.id === editingHistoryId);
+    if (idx >= 0) history[idx] = record;
+    else history.unshift(record);
+  } else {
+    // 新建模式：插入最前
+    history.unshift(record);
+  }
   if (history.length > 50) history.length = 50;
   save(KEYS.elevatorHistory, history);
+  editingHistoryId = null;
   closeElevatorForm();
   renderElevatorHistory();
-  showToast('已复制到剪贴板！', 'success');
+  showToast(editingWas ? '已更新并复制！' : '已复制到剪贴板！', 'success');
 }
+
+// 编辑历史记录：回填表单
+function editElevatorHistory(id) {
+  const history = load(KEYS.elevatorHistory) || [];
+  const item = history.find(h => h.id === id);
+  if (!item) return;
+
+  // 清空表单
+  EF_FIELDS.forEach(fid => {
+    const el = document.getElementById(fid);
+    if (el) el.value = '';
+  });
+  // 回填字段
+  const f = item.fields || {};
+  Object.keys(f).forEach(k => {
+    const el = document.getElementById(k);
+    if (el) el.value = f[k] || '';
+  });
+  // 兼容旧记录（没有 fields 字段时从 fullText 解析）
+  if (!item.fields && item.fullText) {
+    item.fullText.split('\n').forEach(line => {
+      const m = line.match(/^(.+?)：(.*)$/);
+      if (!m) return;
+      const label = m[1], val = m[2];
+      const key = Object.keys(EF_LABEL_MAP).find(k => EF_LABEL_MAP[k] === label);
+      if (key) {
+        const el = document.getElementById(key);
+        if (el) el.value = val === '（未填写）' ? '' : val;
+      }
+    });
+  }
+
+  updateElevatorFieldState();
+  editingHistoryId = id;
+  editingWas = true;
+  document.getElementById('elevatorModalOverlay').classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+
+// 电梯字段中文标签映射（用于旧记录解析）
+const EF_LABEL_MAP = {
+  ef_elevatorType: '电梯类型', ef_expireDate: '设备到期时间', ef_renovation: '改造情况',
+  ef_contact: '联系人', ef_maintainer: '维保单位', ef_handwheel: '盘车轮',
+  ef_emergencyElectric: '紧急电动', ef_autoReset: '限速器自动复位', ef_brakeType: '制动器形式',
+  ef_upOverspeed: '上行超速保护装置', ef_unexpectedMove: '意外移动保护装置', ef_beltType: '包覆带',
+  ef_doorCloser: '层门自闭装置类型', ef_sheaveMaterial: '反绳轮材质', ef_bufferType: '缓冲器类型',
+  ef_counterweight: '对重块数量', ef_safetyWindow: '安全窗', ef_counterSafety: '对重安全钳'
+};
 
 function renderElevatorHistory() {
   const history = load(KEYS.elevatorHistory) || [];
@@ -1144,6 +1209,7 @@ function renderElevatorHistory() {
     <div class="history-item">
       <span class="history-date">${h.date} ${h.time}</span>
       <span class="history-info">${h.preview || '检验记录'}</span>
+      <button class="btn-copy-sm" onclick="editElevatorHistory('${h.id}')" style="border-color:#9BC8A4;background:#EEF9F0;color:#4A8F5A">编辑</button>
       <button class="btn-copy-sm" onclick="recopyHistory('${h.id}')">复制</button>
     </div>
   `).join('');
