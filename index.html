@@ -373,6 +373,12 @@ body::before{
   -webkit-appearance:none;appearance:none;
 }
 .form-group input:focus,.form-group select:focus,.form-group textarea:focus{border-color:var(--primary)}
+.form-group.unfilled label{color:#E5A0A0}
+.form-group.unfilled label .hint{color:#E8B8B8}
+.form-group.unfilled input,.form-group.unfilled select,.form-group.unfilled textarea{
+  border-color:#F2C4C4;background:#FFF7F7;
+}
+.form-group.unfilled input:focus,.form-group.unfilled select:focus,.form-group.unfilled textarea:focus{border-color:#E5A0A0}
 .form-group select{
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238B7FA8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat:no-repeat;background-position:right 14px center;padding-right:36px;
@@ -643,7 +649,16 @@ body::before{
     </h3>
 
     <div class="form-section-title">基本信息</div>
-    <div class="form-group"><label>监督检验时间</label><input type="date" id="ef_inspectDate"></div>
+    <div class="form-group"><label>电梯类型<span class="hint">决定检验配置</span></label>
+      <select id="ef_elevatorType" onchange="elevatorTypeChanged()">
+        <option value="">请选择</option>
+        <option value="05年前超老电梯">05年前超老电梯</option>
+        <option value="超15年电梯">超15年电梯</option>
+        <option value="2017年前老电梯">2017年前老电梯</option>
+        <option value="2017年后新电梯">2017年后新电梯</option>
+        <option value="2024年后超新电梯">2024年后超新电梯</option>
+      </select>
+    </div>
     <div class="form-group"><label>设备到期时间</label><input type="date" id="ef_expireDate"></div>
     <div class="form-group"><label>改造情况</label><input type="text" id="ef_renovation" placeholder="如有改造请记录"></div>
     <div class="form-group"><label>联系人</label><input type="text" id="ef_contact" placeholder="联系人姓名"></div>
@@ -659,10 +674,10 @@ body::before{
     <div class="form-group"><label>包覆带</label><select id="ef_beltType"><option value="">请选择</option><option value="有">有</option><option value="无">无</option></select></div>
 
     <div class="form-section-title">其他部件</div>
-    <div class="form-group"><label>层门自闭装置材质</label><select id="ef_doorCloser"><option value="">请选择</option><option value="金属">金属</option><option value="塑料">塑料</option></select></div>
+    <div class="form-group"><label>层门自闭装置类型</label><select id="ef_doorCloser"><option value="">请选择</option><option value="重锤">重锤</option><option value="弹簧">弹簧</option></select></div>
     <div class="form-group"><label>反绳轮材质</label><select id="ef_sheaveMaterial"><option value="">请选择</option><option value="金属">金属</option><option value="尼龙">尼龙</option></select></div>
     <div class="form-group"><label>缓冲器类型</label><select id="ef_bufferType"><option value="">请选择</option><option value="液压">液压</option><option value="弹簧">弹簧</option><option value="聚氨酯">聚氨酯</option></select></div>
-    <div class="form-group"><label>对重块数量<span class="hint">是否变化？是否新检规？</span></label><input type="text" id="ef_counterweight" placeholder="例如：28块（未变化）"></div>
+    <div class="form-group"><label>对重块数量<span class="hint">是否变化？是否新检规？可换行记录</span></label><textarea id="ef_counterweight" rows="3" placeholder="例如：28块（未变化）&#10;新检规：..." style="min-height:80px;resize:vertical"></textarea></div>
     <div class="form-group"><label>安全窗</label><select id="ef_safetyWindow"><option value="">请选择</option><option value="有">有</option><option value="无">无</option></select></div>
     <div class="form-group"><label>对重安全钳</label><select id="ef_counterSafety"><option value="">请选择</option><option value="有">有</option><option value="无">无</option></select></div>
 
@@ -967,7 +982,7 @@ document.getElementById('tabNav').addEventListener('click', function(e) {
 // ===== ELEVATOR FORM =====
 function openElevatorForm() {
   // Clear form
-  const ids = ['ef_inspectDate','ef_expireDate','ef_renovation','ef_contact','ef_maintainer',
+  const ids = ['ef_elevatorType','ef_expireDate','ef_renovation','ef_contact','ef_maintainer',
     'ef_handwheel','ef_emergencyElectric','ef_autoReset','ef_brakeType','ef_upOverspeed',
     'ef_unexpectedMove','ef_beltType','ef_doorCloser','ef_sheaveMaterial','ef_bufferType',
     'ef_counterweight','ef_safetyWindow','ef_counterSafety'];
@@ -975,11 +990,34 @@ function openElevatorForm() {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
-  // Set today as default inspection date
-  document.getElementById('ef_inspectDate').value = new Date().toISOString().split('T')[0];
+  // Mark all required fields as unfilled
+  updateElevatorFieldState();
   document.getElementById('elevatorModalOverlay').classList.add('show');
   document.body.style.overflow = 'hidden';
 }
+
+// 电梯检验表单字段状态：未填写的显示浅红提醒
+const EF_FIELDS = ['ef_elevatorType','ef_expireDate','ef_renovation','ef_contact','ef_maintainer',
+  'ef_handwheel','ef_emergencyElectric','ef_autoReset','ef_brakeType','ef_upOverspeed',
+  'ef_unexpectedMove','ef_beltType','ef_doorCloser','ef_sheaveMaterial','ef_bufferType',
+  'ef_counterweight','ef_safetyWindow','ef_counterSafety'];
+
+function updateElevatorFieldState() {
+  EF_FIELDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const group = el.closest('.form-group');
+    if (!group) return;
+    if (el.value.trim() === '') group.classList.add('unfilled');
+    else group.classList.remove('unfilled');
+  });
+}
+
+function elevatorTypeChanged() { updateElevatorFieldState(); }
+
+// 监听电梯表单所有输入/选择变化，实时更新填充状态
+document.getElementById('elevatorModal').addEventListener('input', updateElevatorFieldState);
+document.getElementById('elevatorModal').addEventListener('change', updateElevatorFieldState);
 
 function closeElevatorForm() {
   document.getElementById('elevatorModalOverlay').classList.remove('show');
@@ -990,12 +1028,35 @@ function submitElevatorForm() {
   const get = id => document.getElementById(id).value || '（未填写）';
   const fmt = val => val === '（未填写）' ? '' : val;
 
+  // 检查未填写项，提醒用户
+  const unfilled = EF_FIELDS.filter(id => {
+    const el = document.getElementById(id);
+    return el && el.value.trim() === '';
+  });
+  if (unfilled.length > 0) {
+    const labelMap = {
+      ef_elevatorType: '电梯类型', ef_expireDate: '设备到期时间', ef_renovation: '改造情况',
+      ef_contact: '联系人', ef_maintainer: '维保单位', ef_handwheel: '盘车轮',
+      ef_emergencyElectric: '紧急电动', ef_autoReset: '限速器自动复位', ef_brakeType: '制动器形式',
+      ef_upOverspeed: '上行超速保护装置', ef_unexpectedMove: '意外移动保护装置', ef_beltType: '包覆带',
+      ef_doorCloser: '层门自闭装置类型', ef_sheaveMaterial: '反绳轮材质', ef_bufferType: '缓冲器类型',
+      ef_counterweight: '对重块数量', ef_safetyWindow: '安全窗', ef_counterSafety: '对重安全钳'
+    };
+    const names = unfilled.map(id => labelMap[id] || id).join('、');
+    showToast('⚠️ 还有 ' + unfilled.length + ' 项未填写：' + names, '');
+    // 滚动到第一个未填写项
+    const firstEl = document.getElementById(unfilled[0]);
+    if (firstEl) firstEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return; // 不复制，让用户补全
+  }
+
   const lines = [
     '【电梯检验记录】',
-    '检验日期：' + get('ef_inspectDate'),
+    '检验日期：' + new Date().toISOString().split('T')[0],
     '',
     '【基本信息】',
-    '监督检验时间：' + get('ef_inspectDate'),
+    '电梯类型：' + get('ef_elevatorType'),
+    '设备到期时间：' + get('ef_expireDate'),
     '改造情况：' + fmt(get('ef_renovation')),
     '联系人：' + fmt(get('ef_contact')),
     '维保单位：' + fmt(get('ef_maintainer')),
@@ -1010,7 +1071,7 @@ function submitElevatorForm() {
     '包覆带：' + get('ef_beltType'),
     '',
     '【其他部件】',
-    '层门自闭装置材质：' + get('ef_doorCloser'),
+    '层门自闭装置类型：' + get('ef_doorCloser'),
     '反绳轮材质：' + get('ef_sheaveMaterial'),
     '缓冲器类型：' + get('ef_bufferType'),
     '对重块数量：' + fmt(get('ef_counterweight')),
